@@ -1,12 +1,14 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"math/big"
@@ -33,6 +35,17 @@ import (
 type InitMessage struct {
 	Arguments string `json:"Arguments,omitempty"`
 	AuthToken string `json:"AuthToken,omitempty"`
+}
+
+type ExecMessageReq struct {
+	Context string
+	Command string
+}
+
+type ExecMessageRsp struct {
+	Context string
+	Output  string
+	Error   string
 }
 
 type App struct {
@@ -178,6 +191,7 @@ func (app *App) Run() error {
 	wsHandler := http.HandlerFunc(app.handleWS)
 	customIndexHandler := http.HandlerFunc(app.handleCustomIndex)
 	authTokenHandler := http.HandlerFunc(app.handleAuthToken)
+	remoteExecHandler := http.HandlerFunc(app.handleRemoteExec)
 	staticHandler := http.FileServer(
 		&assetfs.AssetFS{Asset: Asset, AssetDir: AssetDir, Prefix: "static"},
 	)
@@ -193,6 +207,7 @@ func (app *App) Run() error {
 	siteMux.Handle(path+"/auth_token.js", authTokenHandler)
 	siteMux.Handle(path+"/js/", http.StripPrefix(path+"/", staticHandler))
 	siteMux.Handle(path+"/favicon.png", http.StripPrefix(path+"/", staticHandler))
+	siteMux.Handle(path+"/rexec", remoteExecHandler)
 
 	siteHandler := http.Handler(siteMux)
 
@@ -416,6 +431,44 @@ func (app *App) handleCustomIndex(w http.ResponseWriter, r *http.Request) {
 func (app *App) handleAuthToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript")
 	w.Write([]byte("var gotty_auth_token = '" + app.options.Credential + "';"))
+}
+
+func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
+	// allow cross domain AJAX requests
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "", http.StatusMethodNotAllowed)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	var req ExecMessageReq
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "", http.StatusBadRequest)
+		return
+	}
+
+	var rsp ExecMessageRsp
+	rsp.Context = req.Context
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, req.Command)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		rsp.Error = fmt.Sprintf("Can not connect to stdout for command %q: %v", req.Command, err)
+		goto Error
+	}
+
+Error:
+	encoder := json.NewEncoder(w)
+	if err := encoder.Encode(rsp); err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (app *App) Exit() (firstCall bool) {
