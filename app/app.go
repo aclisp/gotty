@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math/big"
@@ -38,13 +40,15 @@ type InitMessage struct {
 }
 
 type ExecMessageReq struct {
-	Context string
-	Command string
+	Context   string
+	Command   string
+	Arguments []string
 }
 
 type ExecMessageRsp struct {
 	Context string
-	Output  string
+	Output1 string
+	Output2 string
 	Error   string
 }
 
@@ -450,18 +454,68 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const MaxOutputSize = 40960
+	var err error
+	var stdout io.ReadCloser
+	var stderr io.ReadCloser
+	var bufout bytes.Buffer
+	var buferr bytes.Buffer
+	var readStdout func()
+	var readStderr func()
 	var rsp ExecMessageRsp
 	rsp.Context = req.Context
+	exit := make(chan bool, 2)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, req.Command)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
+	cmd := exec.CommandContext(ctx, req.Command, req.Arguments...)
+	if stdout, err = cmd.StdoutPipe(); err != nil {
 		rsp.Error = fmt.Sprintf("Can not connect to stdout for command %q: %v", req.Command, err)
 		goto Error
 	}
+	if stderr, err = cmd.StderrPipe(); err != nil {
+		rsp.Error = fmt.Sprintf("Can not connect to stderr for command %q: %v", req.Command, err)
+		goto Error
+	}
+	if err := cmd.Start(); err != nil {
+		rsp.Error = fmt.Sprintf("Can not start command %q: %v", req.Command, err)
+		goto Error
+	}
+	bufout.Grow(4096)
+	buferr.Grow(1024)
+
+	readStdout = func() {
+		for bufout.Len() < MaxOutputSize {
+			if _, err := io.CopyN(&bufout, stdout, 1024); err != nil {
+				break
+			}
+		}
+	}
+	readStderr = func() {
+		for buferr.Len() < MaxOutputSize {
+			if _, err := io.CopyN(&buferr, stderr, 1024); err != nil {
+				break
+			}
+		}
+	}
+	go func() {
+		defer func() { exit <- true }()
+		readStdout()
+	}()
+	go func() {
+		defer func() { exit <- true }()
+		readStderr()
+	}()
+
+	<-exit
+	<-exit
+	cancel()
+	if err := cmd.Wait(); err != nil {
+		rsp.Error = fmt.Sprintf("Exit with error for command %q: %v", req.Command, err)
+	}
+	rsp.Output1 = bufout.String()
+	rsp.Output2 = buferr.String()
 
 Error:
 	encoder := json.NewEncoder(w)
