@@ -440,6 +440,8 @@ func (app *App) handleAuthToken(w http.ResponseWriter, r *http.Request) {
 func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 	// allow cross domain AJAX requests
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS, DELETE, POST")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 
 	if r.Method != http.MethodPost {
