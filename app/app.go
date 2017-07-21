@@ -471,6 +471,8 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	log.Printf("Exec %+v", req)
+
 	cmd := exec.CommandContext(ctx, req.Command, req.Arguments...)
 	if stdout, err = cmd.StdoutPipe(); err != nil {
 		rsp.Error = fmt.Sprintf("Can not connect to stdout for command %q: %v", req.Command, err)
