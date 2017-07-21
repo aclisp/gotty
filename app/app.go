@@ -46,7 +46,7 @@ type ExecMessageReq struct {
 }
 
 type ExecMessageRsp struct {
-	Context string
+	*ExecMessageReq
 	Output1 string
 	Output2 string
 	Error   string
@@ -462,8 +462,9 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 	var buferr bytes.Buffer
 	var readStdout func()
 	var readStderr func()
-	var rsp ExecMessageRsp
-	rsp.Context = req.Context
+	rsp := ExecMessageRsp{
+		ExecMessageReq: &req,
+	}
 	exit := make(chan bool, 2)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -488,16 +489,24 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 	readStdout = func() {
 		for bufout.Len() < MaxOutputSize {
 			if _, err := io.CopyN(&bufout, stdout, 1024); err != nil {
-				break
+				if err != io.EOF {
+					bufout.WriteString(fmt.Sprintf("...<Error occurred while reading stdout for command %q: %v>", req.Command, err))
+				}
+				return
 			}
 		}
+		bufout.WriteString("...<More contents were truncated>")
 	}
 	readStderr = func() {
 		for buferr.Len() < MaxOutputSize {
 			if _, err := io.CopyN(&buferr, stderr, 1024); err != nil {
-				break
+				if err != io.EOF {
+					buferr.WriteString(fmt.Sprintf("...<Error occurred while reading stderr for command %q: %v>", req.Command, err))
+				}
+				return
 			}
 		}
+		buferr.WriteString("...<More contents were truncated>")
 	}
 	go func() {
 		defer func() { exit <- true }()
@@ -508,7 +517,6 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 		readStderr()
 	}()
 
-	<-exit
 	<-exit
 	cancel()
 	if err := cmd.Wait(); err != nil {
