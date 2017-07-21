@@ -443,7 +443,6 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 
 	if r.Method != http.MethodPost {
-		http.Error(w, "", http.StatusMethodNotAllowed)
 		return
 	}
 
