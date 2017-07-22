@@ -177,6 +177,8 @@ func CheckConfig(options *Options) error {
 }
 
 func (app *App) Run() error {
+	log.Printf("Signal %d will be sent to the command process when gotty close it.", app.options.CloseSignal)
+
 	if app.options.PermitWrite {
 		log.Printf("Permitting clients to write input to the PTY.")
 	}
