@@ -571,9 +571,14 @@ func (app *App) lookupUidGid() (uid, gid uint32) {
 		log.Printf("lookupUidGid for user %q got (%d, %d): %v", app.options.RunAsUser, uid, gid, err)
 		return
 	}
-	uid = u.Uid
-	gid = u.Gid
+	if decimal, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
+		uid = uint32(decimal)
+	}
+	if decimal, err := strconv.ParseUint(u.Gid, 10, 32); err == nil {
+		gid = uint32(decimal)
+	}
 	log.Printf("lookupUidGid for user %q got (%d, %d)", app.options.RunAsUser, uid, gid)
+	return
 }
 
 func wrapLogger(handler http.Handler) http.Handler {
