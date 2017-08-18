@@ -19,10 +19,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -55,6 +57,8 @@ type ExecMessageRsp struct {
 type App struct {
 	command []string
 	options *Options
+	uid     uint32
+	gid     uint32
 
 	upgrader *websocket.Upgrader
 	server   *manners.GracefulServer
@@ -70,6 +74,7 @@ type App struct {
 }
 
 type Options struct {
+	RunAsUser           string                 `hcl:"run_as_user"`
 	Address             string                 `hcl:"address"`
 	Port                string                 `hcl:"port"`
 	PermitWrite         bool                   `hcl:"permit_write"`
@@ -100,6 +105,7 @@ type Options struct {
 var Version = "1.0.0"
 
 var DefaultOptions = Options{
+	RunAsUser:           "root",
 	Address:             "",
 	Port:                "8080",
 	PermitWrite:         false,
@@ -178,6 +184,10 @@ func CheckConfig(options *Options) error {
 
 func (app *App) Run() error {
 	log.Printf("Signal %d will be sent to the command process when gotty close it.", app.options.CloseSignal)
+
+	uid, gid := app.lookupUidGid()
+	app.uid = uid
+	app.gid = gid
 
 	if app.options.PermitWrite {
 		log.Printf("Permitting clients to write input to the PTY.")
@@ -404,6 +414,8 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := exec.Command(app.command[0], argv...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	cmd.SysProcAttr.Credential = &syscall.Credential{Uid: app.uid, Gid: app.gid}
 	ptyIo, err := pty.Start(cmd)
 	if err != nil {
 		log.Print("Failed to execute command")
@@ -476,6 +488,8 @@ func (app *App) handleRemoteExec(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Exec %+v", req)
 
 	cmd := exec.CommandContext(ctx, req.Command, req.Arguments...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	cmd.SysProcAttr.Credential = &syscall.Credential{Uid: app.uid, Gid: app.gid}
 	if stdout, err = cmd.StdoutPipe(); err != nil {
 		rsp.Error = fmt.Sprintf("Can not connect to stdout for command %q: %v", req.Command, err)
 		goto Error
@@ -547,6 +561,19 @@ func (app *App) Exit() (firstCall bool) {
 		return firstCall
 	}
 	return true
+}
+
+func (app *App) lookupUidGid() (uid, gid uint32) {
+	uid = 0
+	gid = 0
+	u, err := user.Lookup(app.options.RunAsUser)
+	if err != nil {
+		log.Printf("lookupUidGid for user %q got (%d, %d): %v", app.options.RunAsUser, uid, gid, err)
+		return
+	}
+	uid = u.Uid
+	gid = u.Gid
+	log.Printf("lookupUidGid for user %q got (%d, %d)", app.options.RunAsUser, uid, gid)
 }
 
 func wrapLogger(handler http.Handler) http.Handler {
