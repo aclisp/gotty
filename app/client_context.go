@@ -91,7 +91,9 @@ func (context *clientContext) goHandleClient() {
 
 		// Even if the PTY has been closed,
 		// Read(0 in processSend() keeps blocking and the process doen't exit
-		context.command.Process.Signal(syscall.Signal(context.app.options.CloseSignal))
+		//context.command.Process.Signal(syscall.Signal(context.app.options.CloseSignal))
+		// https://medium.com/@felixge/killing-a-child-process-and-all-of-its-children-in-go-54079af94773
+		syscall.Kill(-context.command.Process.Pid, syscall.Signal(context.app.options.CloseSignal))
 
 		context.command.Wait()
 		context.connection.Close()
